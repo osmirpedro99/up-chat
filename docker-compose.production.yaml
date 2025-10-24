@@ -2,31 +2,60 @@ version: '3'
 
 services:
   base: &base
-    image: chatwoot/chatwoot:latest
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
     env_file: .env ## Change this file for customized env variables
+    networks:
+      - upperfy-net
     volumes:
-      - storage_data:/app/storage
-
+      - chatwoot_data:/app/storage
+      - chatwoot_data_public:/app
   rails:
     <<: *base
     depends_on:
       - postgres
-      - redis
+    networks:
+      - upperfy-net
     ports:
-      - '127.0.0.1:3000:3000'
+      - '3000:3000'
     environment:
       - NODE_ENV=production
       - RAILS_ENV=production
       - INSTALLATION_ENV=docker
-    entrypoint: docker/entrypoints/rails.sh
+    entrypoint: ./docker/entrypoints/rails.sh
     command: ['bundle', 'exec', 'rails', 's', '-p', '3000', '-b', '0.0.0.0']
     restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=upperfy-net"
+
+      # HTTP → redireciona para HTTPS
+      - "traefik.http.routers.chatwoot-http.rule=Host(`upperchat.upperfy.com.br`)"
+      - "traefik.http.routers.chatwoot-http.entrypoints=web"
+      - "traefik.http.middlewares.chatwoot-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.chatwoot-redirect.redirectscheme.permanent=true"
+      - "traefik.http.routers.chatwoot-http.middlewares=chatwoot-redirect@docker"
+
+      # HTTPS
+      - "traefik.http.routers.chatwoot.rule=Host(`upperchat.upperfy.com.br`)"
+      - "traefik.http.routers.chatwoot.entrypoints=websecure"
+      - "traefik.http.routers.chatwoot.tls.certresolver=le"
+      - "traefik.http.services.chatwoot.loadbalancer.server.port=3000"
+
+      # Middleware para cabeçalho HTTPS (necessário para ActionCable)
+      - "traefik.http.middlewares.chatwoot-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
+      - "traefik.http.routers.chatwoot.middlewares=chatwoot-headers@docker"
 
   sidekiq:
     <<: *base
     depends_on:
       - postgres
-      - redis
+    networks:
+      - upperfy-net
+    volumes:
+      - chatwoot_data:/app/storage
+      - chatwoot_data_public:/app      
     environment:
       - NODE_ENV=production
       - RAILS_ENV=production
@@ -36,28 +65,38 @@ services:
 
   postgres:
     image: pgvector/pgvector:pg16
+    container_name: postgres
+    networks:
+      - upperfy-net
     restart: always
     ports:
       - '127.0.0.1:5432:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
-      - POSTGRES_DB=chatwoot
-      - POSTGRES_USER=postgres
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USERNAME}
       # Please provide your own password.
-      - POSTGRES_PASSWORD=
-
-  redis:
-    image: redis:alpine
-    restart: always
-    command: ["sh", "-c", "redis-server --requirepass \"$REDIS_PASSWORD\""]
-    env_file: .env
-    volumes:
-      - redis_data:/data
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+  adminer:
+    image: adminer:latest
+    networks:
+      - upperfy-net
+    container_name: up-chat_adminer
+    restart: unless-stopped
     ports:
-      - '127.0.0.1:6379:6379'
-
+      - "8085:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    depends_on:
+      - postgres
 volumes:
-  storage_data:
+  redis-data:
   postgres_data:
-  redis_data:
+  chatwoot_data:
+  chatwoot_data_public:
+
+networks:
+  upperfy-net:
+    external: true
+    name: upperfy-net
