@@ -31,7 +31,7 @@ export default {
           ),
           preview: {
             senderName: 'Smith',
-            businessName: 'Chatwoot',
+            businessName: 'Upperchat',
             email: '<support@yourbusiness.com>',
           },
         },
